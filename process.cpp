@@ -34,6 +34,17 @@ bool Process::CloseOpenHandle( ) const
 	return true;
 }
 
+std::string Process::FetchProcessImageFileName( ) const
+{
+	char process_name[ MAX_PATH ] = { };
+
+	if ( !GetProcessImageFileName( this->handle, process_name, MAX_PATH ) ) {
+		return { };
+	}
+
+	return std::string{ process_name };
+}
+
 bool Process::Terminate( UINT exit_code ) const
 {
 	if ( !TerminateProcess( this->handle, exit_code ) ) {
@@ -62,7 +73,7 @@ std::vector<HANDLE> Process::FetchThreads( ) const
 			thread_handles.push_back( thread_handle );
 		}
 	} while ( Thread32Next( snapshot, &thread_entry ) );
-
+	
 	if ( !CloseHandle( snapshot ) ) {
 		return { };
 	}
@@ -84,7 +95,7 @@ bool Process::Resume( ) const
 
 bool Process::NtResume( ) const
 {
-	static auto ResumeProcess = ( Process::NtResumeProcess ) GetProcAddress( GetModuleHandle( "ntdll" ), "NtResumeProcess" );
+	static auto ResumeProcess = ( Process::NtResumeProcess ) GetProcAddress( GetModuleHandleA( "ntdll" ), "NtResumeProcess" );
 	if ( NT_ERROR( ResumeProcess( Process::handle ) ) ) {
 		return false;
 	}
@@ -106,7 +117,7 @@ bool Process::Suspend( ) const
 
 bool Process::NtSuspend( ) const
 {
-	static auto SuspendProcess = ( Process::NtSuspendProcess ) GetProcAddress( GetModuleHandle( "ntdll" ), "NtSuspendProcess" );
+	static auto SuspendProcess = ( Process::NtSuspendProcess ) GetProcAddress( GetModuleHandleA( "ntdll" ), "NtSuspendProcess" );
 	if ( NT_ERROR( SuspendProcess( this->handle ) ) ) {
 		return false;
 	}
@@ -182,7 +193,7 @@ bool Process::Is64Bit( ) const
 	return false;
 }
 
-HANDLE Privileges::FetchTokenHandle( DWORD desired_access ) const
+HANDLE Process::FetchAccessToken( DWORD desired_access ) const
 {
 	HANDLE token_handle;
 
@@ -193,9 +204,9 @@ HANDLE Privileges::FetchTokenHandle( DWORD desired_access ) const
 	return token_handle;
 }
 
-bool Privileges::RtlAdjustPrivileges( ULONG privilege, BOOLEAN enable, BOOLEAN current_thread, PBOOLEAN enabled )
+bool Process::RtlAdjustPrivileges( ULONG privilege, BOOLEAN enable, BOOLEAN current_thread, PBOOLEAN enabled )
 {
-	static auto AdjustPrivileges = ( Process::RtlAdjustPrivilege ) GetProcAddress( GetModuleHandle( "ntdll" ), "RtlAdjustPrivilege" );
+	static auto AdjustPrivileges = ( Process::RtlAdjustPrivilege ) GetProcAddress( GetModuleHandleA( "ntdll" ), "RtlAdjustPrivilege" );
 	if ( NT_ERROR( AdjustPrivileges( privilege, enable, current_thread, enabled ) ) ) {
 		return false;
 	}
