@@ -1,5 +1,5 @@
 WindowsProcessManipulation
 
 ## TODO
-IAT/EAT manipulation
-Token privileges
+- IAT/EAT manipulation
+- Token privileges
