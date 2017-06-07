@@ -101,9 +101,6 @@ public:
 	// Calls CloseOpenHandle.
 	~Process( );
 
-	// Checks if the process is running/active.
-	bool IsValid( ) const;
-
 	/**
 	* Set the access to the process object. This access right is checked against the security descriptor for the process.
 	* You do not need to call this function if you need PROCESS_ALL_ACCESS as your desired access.
