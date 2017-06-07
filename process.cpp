@@ -1,5 +1,4 @@
 #include "process.h"
-#include <memory>
 
 Process::Process( DWORD process_id )
 {

@@ -34,6 +34,8 @@ For more information, please refer to <http://unlicense.org>
 #include <winternl.h>
 #include <ntstatus.h>
 
+#include <memory>
+
 #include <vector>
 
 #include <TlHelp32.h>
