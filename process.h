@@ -1,27 +1,121 @@
+/*
+This is free and unencumbered software released into the public domain.
+
+Anyone is free to copy, modify, publish, use, compile, sell, or
+distribute this software, either in source code form or as a compiled
+binary, for any purpose, commercial or non-commercial, and by any
+means.
+
+In jurisdictions that recognize copyright laws, the author or authors
+of this software dedicate any and all copyright interest in the
+software to the public domain. We make this dedication for the benefit
+of the public at large and to the detriment of our heirs and
+successors. We intend this dedication to be an overt act of
+relinquishment in perpetuity of all present and future rights to this
+software under copyright law.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR
+OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE.
+
+For more information, please refer to <http://unlicense.org> 
+*/
+
 #pragma once
 
-#include "stdafx.h"
+#define WIN32_NO_STATUS
+#include <windows.h>
+#undef WIN32_NO_STATUS
+
+#include <winternl.h>
+#include <ntstatus.h>
+
+#include <vector>
+
+#include <TlHelp32.h>
+
+#include <psapi.h>
+#pragma comment(lib,"psapi")
 
 class Process
 {
 public:
+	struct HANDLE_INFO
+	{
+		DWORD pid;
+		HANDLE process;
+	};
+
+private:
+	// SystemHandleInformation
+	typedef struct _SYSTEM_HANDLE_TABLE_ENTRY_INFO
+	{
+		ULONG pid;
+		BYTE object_type_number; 
+		BYTE flags;
+		USHORT handle;
+		PVOID object;
+		ACCESS_MASK granted_access;
+	} SYSTEM_HANDLE_TABLE_ENTRY_INFO, *PSYSTEM_HANDLE_TABLE_ENTRY_INFO;
+
+	typedef struct _SYSTEM_HANDLE_INFORMATION
+	{
+		ULONG number_of_handles;
+		SYSTEM_HANDLE_TABLE_ENTRY_INFO handles[ 1 ];
+	} SYSTEM_HANDLE_INFORMATION, *PSYSTEM_HANDLE_INFORMATION;
+
+	// SystemExtendedHandleInformation
+	typedef struct _SYSTEM_HANDLE_TABLE_ENTRY_INFO_EX
+	{
+		PVOID object;
+		ULONG pid;
+		ULONG handle_value;
+		ACCESS_MASK granted_access;
+		USHORT creator_backtrace_index_ushort_;
+		USHORT object_type_index;
+		ULONG handle_attributes;
+		ULONG reserved;
+	} SYSTEM_HANDLE_TABLE_ENTRY_INFO_EX, *PSYSTEM_HANDLE_TABLE_ENTRY_INFO_EX;
+
+	typedef struct _SYSTEM_HANDLE_INFORMATION_EX
+	{
+		ULONG number_of_handles;
+		ULONG reserved;
+		SYSTEM_HANDLE_TABLE_ENTRY_INFO_EX handles[ 1 ];
+	} SYSTEM_HANDLE_INFORMATION_EX, *PSYSTEM_HANDLE_INFORMATION_EX;
+
+public:
 	/**
 	* Saves the process_id argument for later use.
 	* 
-	* @param process_id				The Process ID(PID).
+	* @param process_id				The process ID(PID).
 	*/
 	explicit Process( DWORD process_id );
 
 	// Calls CloseOpenHandle.
 	~Process( );
-	
+
+	// Checks if the process is running/active.
+	bool IsValid( ) const;
+
+	/**
+	* Set the access to the process object. This access right is checked against the security descriptor for the process.
+	* You do not need to call this function if you need PROCESS_ALL_ACCESS as your desired access.
+	* 
+	* @param desired_access			The access to the process object.
+	*/
+	void SetDesiredAccess( DWORD desired_access );
+
 	/**
 	* Wrapper function for OpenProcess.
 	* 
-	* @param desired_access			The access to the process object. This access right is checked against the security descriptor for the process.
 	* @param inherit_handle			If this value is TRUE, processes created by this process will inherit the handle.
 	*/
-	bool Open( DWORD desired_access, BOOL inherit_handle );
+	bool Open( BOOL inherit_handle );
 	
 	/**
 	* Wrapper function for CloseHandle.
@@ -68,12 +162,18 @@ public:
 	/**
 	* Retrieves PIMAGE_NT_HEADERS structure
 	*/
-	PIMAGE_NT_HEADERS FetchImageHeader( ) const;
+	PIMAGE_NT_HEADERS FetchImageHeader( );
 
 	/**
 	* Determines if the process is 64bit architecture by checking the file header for IMAGE_FILE_MACHINE_AMD64.
 	*/
-	bool Is64Bit( ) const;
+	bool Is64Bit( );
+
+	// TODO: doc
+	std::vector<DWORD> FetchImports( );
+
+	// TODO: doc
+	std::vector<HANDLE_INFO> FetchHandles( ) const;
 
 	/**
 	* Opens the access token associated with the process.
@@ -81,6 +181,8 @@ public:
 	* @param desired_access		    Specifies an access mask that specifies the requested types of access to the access token. 
 	*/
 	HANDLE FetchAccessToken( DWORD desired_access ) const;
+
+	bool SetPrivilege( LPCTSTR name, BOOL enable_privilege ) const;
 
 	/**
 	* EXPERIMENTAL: Enables or disables a privilege from the calling thread or process.
@@ -93,16 +195,16 @@ public:
 	static bool RtlAdjustPrivileges( ULONG privilege, BOOLEAN enable, BOOLEAN current_thread, PBOOLEAN enabled );
 
 protected:
-	DWORD pid;		// Process ID
-	HANDLE handle;  // Handle to process
-
-	using RtlAdjustPrivilege = NTSTATUS( WINAPI* )( ULONG, BOOLEAN, BOOLEAN, PBOOLEAN );
+	DWORD m_desired_access = PROCESS_ALL_ACCESS;	// Desired access
+	DWORD m_pid;									// Process ID
+	HANDLE m_handle;								// Handle to process
+	HANDLE m_file;									// Handle to file
 
 private:
 	/**
 	* Maps a view of a file mapping into the address space of a calling process for use with FetchImageHeader.
 	*/
-	HANDLE CreateMapView( ) const;
+	HANDLE CreateMapView( );
 
 	/**
 	* Retrieves the DOS header for use with FetchImageHeader.
@@ -111,6 +213,18 @@ private:
 	*/
 	static PIMAGE_DOS_HEADER FetchDOSHeader( HANDLE map_view );
 
-	using NtSuspendProcess = NTSTATUS( WINAPI* )( HANDLE );
-	using NtResumeProcess = NTSTATUS( WINAPI* )( HANDLE );
+	// Run-time dynamic linking.
+	using NtSuspendProcess = NTSTATUS( NTAPI* )( HANDLE );
+	using NtResumeProcess = NTSTATUS( NTAPI* )( HANDLE );
+	using NtQuerySystemInformation = NTSTATUS( NTAPI* )( ULONG, PVOID, ULONG, PULONG );
+
+	using RtlAdjustPrivilege = NTSTATUS( WINAPI* )( ULONG, BOOLEAN, BOOLEAN, PBOOLEAN );
+
+	enum _SYSTEM_INFORMATION_CLASS
+	{
+		SystemProcessInformation = 0x0005,
+		SystemHandleInformation = 0x0010,
+		SystemExtendedProcessInformation = 0x0039,
+		SystemExtendedHandleInformation = 0x0040 // SystemExtendedHandleInformation isn't stuck with 16bit process IDs.
+	};
 };
