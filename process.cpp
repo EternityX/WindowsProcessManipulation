@@ -12,15 +12,6 @@ Process::~Process( )
 	Process::CloseOpenHandle( );
 }
 
-bool Process::IsValid( ) const
-{
-	if ( this->m_handle == INVALID_HANDLE_VALUE ) {
-		return false;
-	}
-
-	return WaitForSingleObject( this->m_handle, 0 ) == WAIT_TIMEOUT;
-}
-
 void Process::SetDesiredAccess( DWORD desired_access )
 {
 	this->m_desired_access = desired_access;
