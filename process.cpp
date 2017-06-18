@@ -26,6 +26,7 @@ Process::~Process( )
 	Process::CloseOpenHandle( );
 }
 
+<<<<<<< HEAD
 bool Process::IsValid( ) const
 {
 	if ( m_handle == INVALID_HANDLE_VALUE ) {
@@ -52,6 +53,8 @@ LRESULT Process::IsNotResponding( UINT timeout ) const
 	return true;
 }
 
+=======
+>>>>>>> master
 void Process::SetDesiredAccess( DWORD desired_access )
 {
 	m_desired_access = desired_access;

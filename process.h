@@ -120,6 +120,7 @@ public:
 	// Calls CloseOpenHandle.
 	~Process( );
 
+<<<<<<< HEAD
 	// Checks if the process is running/active.
 	bool IsValid( ) const;
 
@@ -133,6 +134,8 @@ public:
 	*/
 	LRESULT IsNotResponding( UINT timeout ) const;
 
+=======
+>>>>>>> master
 	/**
 	* Set the access to the process object. This access right is checked against the security descriptor for the process.
 	* You do not need to call this function if you need PROCESS_ALL_ACCESS as your desired access.
