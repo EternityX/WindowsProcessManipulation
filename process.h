@@ -40,8 +40,11 @@ For more information, please refer to <http://unlicense.org>
 
 #include <TlHelp32.h>
 
+#include "Shlwapi.h"
+#pragma comment(lib, "shlwapi")
+
 #include <psapi.h>
-#pragma comment(lib,"psapi")
+#pragma comment(lib, "psapi")
 
 class Process
 {
@@ -52,16 +55,23 @@ public:
 		HANDLE process;
 	};
 
+	struct IMPORT_INFO
+	{
+		unsigned long library;
+		unsigned long function;
+	};
+
 private:
 	// SystemHandleInformation
 	typedef struct _SYSTEM_HANDLE_TABLE_ENTRY_INFO
 	{
-		ULONG pid;
-		BYTE object_type_number; 
-		BYTE flags;
-		USHORT handle;
+		USHORT unique_pid;
+		USHORT creator_backtrace_index;
+		UCHAR object_type_index;
+		UCHAR handle_attributes;
+		USHORT handle_value;
 		PVOID object;
-		ACCESS_MASK granted_access;
+		ULONG granted_access;
 	} SYSTEM_HANDLE_TABLE_ENTRY_INFO, *PSYSTEM_HANDLE_TABLE_ENTRY_INFO;
 
 	typedef struct _SYSTEM_HANDLE_INFORMATION
@@ -74,10 +84,10 @@ private:
 	typedef struct _SYSTEM_HANDLE_TABLE_ENTRY_INFO_EX
 	{
 		PVOID object;
-		ULONG pid;
-		ULONG handle_value;
-		ACCESS_MASK granted_access;
-		USHORT creator_backtrace_index_ushort_;
+		ULONG_PTR unique_pid;
+		ULONG_PTR handle_value;
+		ULONG granted_access;
+		USHORT creator_backtrace_index;
 		USHORT object_type_index;
 		ULONG handle_attributes;
 		ULONG reserved;
@@ -85,24 +95,43 @@ private:
 
 	typedef struct _SYSTEM_HANDLE_INFORMATION_EX
 	{
-		ULONG number_of_handles;
-		ULONG reserved;
+		ULONG_PTR number_of_handles;
+		ULONG_PTR reserved;
 		SYSTEM_HANDLE_TABLE_ENTRY_INFO_EX handles[ 1 ];
 	} SYSTEM_HANDLE_INFORMATION_EX, *PSYSTEM_HANDLE_INFORMATION_EX;
 
 public:
 	/**
-	* Saves the process_id argument for later use.
+	* Constructor
 	* 
 	* @param process_id				The process ID(PID).
+	* @param desired_access			The access to the process object.
 	*/
-	explicit Process( DWORD process_id );
+	Process( DWORD process_id, DWORD desired_access );
+
+	/**
+	* Constructor
+	*
+	* @param process_name			The process name.
+	* @param desired_access			The access to the process object.
+	*/
+	Process( std::string process_name, DWORD desired_access );
 
 	// Calls CloseOpenHandle.
 	~Process( );
 
 	// Checks if the process is running/active.
 	bool IsValid( ) const;
+
+	// Wrapper function for IsHungAppWindow, returns true if the application is hanging.
+	BOOL IsNotResponding( ) const;
+
+	/**
+	* Sends the WM_NULL message to the primary window handle.
+	*
+	* @param timeout				The duration of the time-out period, in milliseconds.
+	*/
+	LRESULT IsNotResponding( UINT timeout ) const;
 
 	/**
 	* Set the access to the process object. This access right is checked against the security descriptor for the process.
@@ -111,6 +140,38 @@ public:
 	* @param desired_access			The access to the process object.
 	*/
 	void SetDesiredAccess( DWORD desired_access );
+
+	/**
+	* Set the m_name member variable.
+	*
+	* @param module_name			The process name.
+	*/
+	void SetModuleName( std::string module_name );
+
+	/**
+	* Set the m_hwnd member variable.
+	*
+	* @param window_handle			The primary window handle.
+	*/
+	void SetPrimaryWindowHandle( HWND window_handle );
+
+	// Returns m_pid member.
+	DWORD GetPid( ) const;
+
+	// Returns m_desired_access member.
+	DWORD GetDesiredAccess( ) const;
+
+	// Returns m_hwnd member.
+	HWND GetPrimaryWindowHandle( ) const;
+
+	// Returns m_handle member.
+	HANDLE GetHandle( ) const;
+
+	// Returns m_file member.
+	HANDLE GetFile( ) const;
+
+	// Returns m_name member.
+	std::string GetModuleName( ) const;
 
 	/**
 	* Wrapper function for OpenProcess.
@@ -125,9 +186,21 @@ public:
 	bool CloseOpenHandle( ) const;
 
 	/**
+	* Returns process ID. -1 on failure.
+	* 
+	* @param process_name			The target process name.
+	*/
+	static DWORD FetchProcessByName( std::string process_name );
+
+	/**
 	* Wrapper function for GetProcessImageFileName.
 	*/
 	std::string FetchProcessImageFileName( ) const;
+
+	/**
+	* Wrapper function for GetModuleFileName.
+	*/
+	std::string FetchModuleFileName( ) const;
 
 	/**
 	* Wrapper function for TerminateProcess.
@@ -172,7 +245,7 @@ public:
 	bool Is64Bit( );
 
 	// TODO: doc
-	std::vector<DWORD> FetchImports( );
+	std::vector<IMPORT_INFO> FetchImports( );
 
 	// TODO: doc
 	std::vector<HANDLE_INFO> FetchHandles( ) const;
@@ -184,6 +257,12 @@ public:
 	*/
 	HANDLE FetchAccessToken( DWORD desired_access ) const;
 
+	/**
+	* Wrapper function for AdjustTokenPrivileges.
+	*
+	* @param name					A pointer to a null-terminated string that specifies the name of the privilege, as defined in the Winnt.h header file
+	* @param enable_privilege		Enables or disables the privilege.
+	*/	
 	bool SetPrivilege( LPCTSTR name, BOOL enable_privilege ) const;
 
 	/**
@@ -197,12 +276,17 @@ public:
 	static bool RtlAdjustPrivileges( ULONG privilege, BOOLEAN enable, BOOLEAN current_thread, PBOOLEAN enabled );
 
 protected:
-	DWORD m_desired_access = PROCESS_ALL_ACCESS;	// Desired access
 	DWORD m_pid;									// Process ID
+	DWORD m_desired_access;							// Desired access
+	HWND m_hwnd;									// Window handle
 	HANDLE m_handle;								// Handle to process
 	HANDLE m_file;									// Handle to file
+	std::string m_name;								// Module name
 
 private:
+	// Calls GetWindowThreadProcessId to return the primary window handle.
+	HWND FetchPrimaryWindowHandle( );
+
 	/**
 	* Maps a view of a file mapping into the address space of a calling process for use with FetchImageHeader.
 	*/
@@ -219,6 +303,7 @@ private:
 	using NtSuspendProcess = NTSTATUS( NTAPI* )( HANDLE );
 	using NtResumeProcess = NTSTATUS( NTAPI* )( HANDLE );
 	using NtQuerySystemInformation = NTSTATUS( NTAPI* )( ULONG, PVOID, ULONG, PULONG );
+	using NtQueryObject = NTSTATUS( NTAPI* )( ULONG, OBJECT_INFORMATION_CLASS, PVOID, ULONG, PULONG );
 
 	using RtlAdjustPrivilege = NTSTATUS( WINAPI* )( ULONG, BOOLEAN, BOOLEAN, PBOOLEAN );
 

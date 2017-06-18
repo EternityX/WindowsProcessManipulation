@@ -1,10 +1,24 @@
 #include "process.h"
+#include <iostream>
+#include <string>
 
-Process::Process( DWORD process_id )
+Process::Process( DWORD process_id, DWORD desired_access )
 {
-	this->m_pid = process_id;
-	this->m_handle = nullptr;
-	this->m_file = nullptr;
+	m_pid = process_id;
+	m_desired_access = desired_access;
+	m_hwnd = Process::FetchPrimaryWindowHandle( );
+	m_handle = nullptr;
+	m_file = nullptr;
+}
+
+Process::Process( std::string process_name, DWORD desired_access )
+{
+	m_pid = Process::FetchProcessByName( process_name );
+	m_desired_access = desired_access;
+	m_hwnd = Process::FetchPrimaryWindowHandle( );
+	m_handle = nullptr;
+	m_file = nullptr;
+	m_name = process_name;
 }
 
 Process::~Process( )
@@ -14,22 +28,79 @@ Process::~Process( )
 
 bool Process::IsValid( ) const
 {
-	if ( this->m_handle == INVALID_HANDLE_VALUE ) {
+	if ( m_handle == INVALID_HANDLE_VALUE ) {
 		return false;
 	}
 
-	return WaitForSingleObject( this->m_handle, 0 ) == WAIT_TIMEOUT;
+	if ( !WaitForSingleObject( m_handle, 5000 ) ) {
+		return false;
+	}
+	
+	return true;
+}
+
+BOOL Process::IsNotResponding( ) const
+{
+	return IsHungAppWindow( m_hwnd );
+}
+
+LRESULT Process::IsNotResponding( UINT timeout ) const
+{
+	if ( !SendMessageTimeoutA( m_hwnd, WM_NULL, 0, 0, SMTO_BLOCK | SMTO_ABORTIFHUNG, timeout, nullptr ) )
+		return false;
+
+	return true;
 }
 
 void Process::SetDesiredAccess( DWORD desired_access )
 {
-	this->m_desired_access = desired_access;
+	m_desired_access = desired_access;
+}
+
+void Process::SetModuleName( std::string module_name )
+{
+	m_name = module_name;
+}
+
+void Process::SetPrimaryWindowHandle( HWND window_handle )
+{
+	m_handle = window_handle;
+}
+
+DWORD Process::GetPid( ) const
+{
+	return m_pid;
+}
+
+DWORD Process::GetDesiredAccess( ) const
+{
+	return m_desired_access;
+}
+
+HWND Process::GetPrimaryWindowHandle( ) const
+{
+	return m_hwnd;
+}
+
+HANDLE Process::GetHandle( ) const
+{
+	return m_handle;
+}
+
+HANDLE Process::GetFile( ) const
+{
+	return m_file;
+}
+
+std::string Process::GetModuleName( ) const
+{
+	return m_name;
 }
 
 bool Process::Open( BOOL inherit_handle )
 {
-	this->m_handle = OpenProcess( this->m_desired_access, inherit_handle, this->m_pid );
-	if ( this->m_handle == INVALID_HANDLE_VALUE ) {
+	m_handle = OpenProcess( m_desired_access, inherit_handle, m_pid );
+	if ( m_handle == INVALID_HANDLE_VALUE ) {
 		return false;
 	}
 
@@ -38,31 +109,98 @@ bool Process::Open( BOOL inherit_handle )
 
 bool Process::CloseOpenHandle( ) const
 {
-	if ( this->m_handle == INVALID_HANDLE_VALUE ) {
+	if ( m_handle == INVALID_HANDLE_VALUE ) {
 		return false;
 	}
 
-	if ( !CloseHandle( this->m_handle ) ) {
+	if ( !CloseHandle( m_handle ) ) {
 		return false;
 	}
 
 	return true;
 }
 
+DWORD Process::FetchProcessByName( std::string process_name )
+{
+	int count = 0;
+	int pid = 0;
+
+	HANDLE snapshot = CreateToolhelp32Snapshot( TH32CS_SNAPPROCESS, 0 );
+
+	if ( snapshot == INVALID_HANDLE_VALUE ) {
+		return -1;
+	}
+
+	PROCESSENTRY32 process_entry = { sizeof( PROCESSENTRY32 ) };
+	Process32Next( snapshot, &process_entry );
+	do
+	{
+		if ( !process_name.compare( std::string( process_entry.szExeFile ) ) )
+		{
+			count++;
+			pid = process_entry.th32ProcessID;
+		}
+	} while ( Process32Next( snapshot, &process_entry ) );
+
+	if ( count > 1 ) {
+		pid = -1;
+	}
+
+	CloseHandle( snapshot );
+
+	return pid;
+}
+
+HWND Process::FetchPrimaryWindowHandle( )
+{
+	std::pair<HWND, DWORD> pair = { nullptr, m_pid };
+
+	BOOL result = EnumWindows( [ ]( HWND hwnd, LPARAM lparam ) -> BOOL
+	{
+		auto params = reinterpret_cast< std::pair<HWND, DWORD>* >( lparam );
+
+		DWORD processId;
+		if ( GetWindowThreadProcessId( hwnd, &processId ) && processId == params->second && GetWindow( hwnd, GW_OWNER ) == nullptr )
+		{
+			params->first = hwnd;
+			return FALSE;
+		}
+
+		return TRUE;
+	}, reinterpret_cast<LPARAM>( &pair ) );
+
+	if ( !result && pair.first ) {
+		return pair.first;
+	}
+
+	return nullptr;
+}
+
 std::string Process::FetchProcessImageFileName( ) const
 {
-	char process_name[ MAX_PATH ] = { };
+	char process_image_name[ MAX_PATH ];
 
-	if ( !GetProcessImageFileName( this->m_handle, process_name, MAX_PATH ) ) {
+	if ( !K32GetProcessImageFileNameA( m_handle, process_image_name, MAX_PATH ) ) {
 		return { };
 	}
 
-	return std::string{ process_name };
+	return { process_image_name };
+}
+
+std::string Process::FetchModuleFileName( ) const
+{
+	char module_name[ MAX_PATH ];
+
+	if ( !K32GetModuleFileNameExA( m_handle, nullptr, module_name, MAX_PATH ) ) {
+		return { };
+	}
+
+	return { module_name };
 }
 
 bool Process::Terminate( UINT exit_code ) const
 {
-	if ( !TerminateProcess( this->m_handle, exit_code ) ) {
+	if ( !TerminateProcess( m_handle, exit_code ) ) {
 		return false;
 	}
 
@@ -133,7 +271,7 @@ bool Process::Suspend( ) const
 bool Process::NtSuspend( ) const
 {
 	static auto SuspendProcess = reinterpret_cast<Process::NtSuspendProcess>( GetProcAddress( GetModuleHandleA( "ntdll" ), "NtSuspendProcess" ) );
-	if ( NT_ERROR( SuspendProcess( this->m_handle ) ) ) {
+	if ( NT_ERROR( SuspendProcess( m_handle ) ) ) {
 		return false;
 	}
 
@@ -143,16 +281,16 @@ bool Process::NtSuspend( ) const
 HANDLE Process::CreateMapView( )
 {
 	TCHAR buffer[ MAX_PATH ];
-	if ( !GetModuleFileNameEx( this->m_handle, nullptr, buffer, MAX_PATH ) ) {
+	if ( !K32GetModuleFileNameExA( m_handle, nullptr, buffer, MAX_PATH ) ) {
 		return nullptr;
 	}
 
-	this->m_file = CreateFile( buffer, GENERIC_READ, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr );
-	if ( this->m_file == INVALID_HANDLE_VALUE ) {
+	m_file = CreateFileA( buffer, GENERIC_READ, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr );
+	if ( m_file == INVALID_HANDLE_VALUE ) {
 		return nullptr;
 	}
 
-	HANDLE map = CreateFileMapping( this->m_file, nullptr, PAGE_READONLY, 0, 0, nullptr );
+	HANDLE map = CreateFileMappingA( m_file, nullptr, PAGE_READONLY, 0, 0, nullptr );
 	if ( !map ) {
 		return nullptr;
 	}
@@ -162,7 +300,7 @@ HANDLE Process::CreateMapView( )
 		return nullptr;
 	}
 
-	if ( !CloseHandle( this->m_file ) && !CloseHandle( map ) && !CloseHandle( map_view ) ) {
+	if ( !CloseHandle( m_file ) && !CloseHandle( map ) && !CloseHandle( map_view ) ) {
 		return nullptr;
 	}
 
@@ -208,21 +346,63 @@ bool Process::Is64Bit( )
 	return false;
 }
 
-std::vector<DWORD> Process::FetchImports( )
+// basic implementation
+std::vector<Process::IMPORT_INFO> Process::FetchImports( )
 {
-	std::vector<DWORD> return_imports;
+	std::vector<IMPORT_INFO> return_imports;
+
+	HANDLE file = CreateFileA( FetchModuleFileName( ).c_str( ), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr );
+	if ( file == INVALID_HANDLE_VALUE ) {
+		CloseHandle( file );
+		return { };
+	} 
+	CloseHandle( file );
 
 	PIMAGE_NT_HEADERS nt_header = Process::FetchImageHeader( );
 	if ( !nt_header ) {
 		return { };
 	}
+
+	auto section_header = reinterpret_cast<PIMAGE_SECTION_HEADER>( reinterpret_cast<DWORD>( nt_header ) + sizeof( IMAGE_NT_HEADERS ) );
+
+	DWORD section = 0;
 	
-	DWORD virtual_address = nt_header->OptionalHeader.DataDirectory[ IMAGE_DIRECTORY_ENTRY_IMPORT ].VirtualAddress;
-	if ( !virtual_address ) {
+	DWORD rva = nt_header->OptionalHeader.DataDirectory[ IMAGE_DIRECTORY_ENTRY_IMPORT ].VirtualAddress;
+	if ( !rva ) {
 		return { };
 	}
 
-	// TODO
+	do  
+	{
+		section_header++;
+		section++;
+	} while ( section < nt_header->FileHeader.NumberOfSections && section_header->VirtualAddress <= rva );
+
+	section_header--;
+
+	DWORD base = reinterpret_cast<DWORD>( Process::CreateMapView( ) ) + section_header->PointerToRawData;
+	auto import_descriptor = reinterpret_cast<PIMAGE_IMPORT_DESCRIPTOR>( base + ( rva - section_header->VirtualAddress ) );
+
+	IMPORT_INFO import_info;
+	while ( import_descriptor->Name != 0 )
+	{
+		import_info.library = base + ( import_descriptor->Name - section_header->VirtualAddress );
+
+		auto thunk_data = reinterpret_cast<PIMAGE_THUNK_DATA>( base + ( import_descriptor->FirstThunk - section_header->VirtualAddress ) );
+		while ( thunk_data->u1.AddressOfData != 0 )
+		{
+			// need to get ordinals too
+			if ( !( thunk_data->u1.AddressOfData & IMAGE_ORDINAL_FLAG ) ) {
+				import_info.function = base + ( thunk_data->u1.AddressOfData - section_header->VirtualAddress + 2 );	
+			}
+
+			return_imports.push_back( import_info );
+
+			thunk_data++;
+		} 
+
+		import_descriptor++;
+	}
 	
 	return return_imports;
 }
@@ -239,7 +419,7 @@ std::vector<Process::HANDLE_INFO> Process::FetchHandles( ) const
 
 	NTSTATUS status;
 
-	do // guess buffer size
+	do
 	{
 		status = QuerySystemInformation( SystemExtendedHandleInformation, buffer.get( ), buffer_size, &buffer_size );
 		if ( status == STATUS_INFO_LENGTH_MISMATCH )
@@ -260,20 +440,24 @@ std::vector<Process::HANDLE_INFO> Process::FetchHandles( ) const
 
 		auto system_handle = &system_handle_info->handles[ i ];
 
-		HANDLE process_handle = OpenProcess( PROCESS_DUP_HANDLE, FALSE, system_handle->pid );
-		if ( DuplicateHandle( process_handle, reinterpret_cast<HANDLE>( system_handle->handle_value ), GetCurrentProcess( ), &process_copy, PROCESS_QUERY_INFORMATION, 0, 0 ) )
+		if ( system_handle->object_type_index == 7 )
 		{
-			HANDLE_INFO handle_info = { 0, nullptr };
-
-			if ( GetProcessId( process_copy ) == this->m_pid )
+			HANDLE process_handle = OpenProcess( PROCESS_DUP_HANDLE, FALSE, system_handle->unique_pid );
+			if ( DuplicateHandle( process_handle, reinterpret_cast<HANDLE>( system_handle->handle_value ), GetCurrentProcess( ), &process_copy, PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, 0, 0 ) )
 			{
-				handle_info.pid = system_handle->pid;
-				handle_info.process = reinterpret_cast<HANDLE>( system_handle->handle_value );
-				return_handles.push_back( handle_info );
+				HANDLE_INFO handle_info = { 0, nullptr };
+
+				if ( GetProcessId( process_copy ) == m_pid )
+				{
+					handle_info.pid = system_handle->unique_pid;
+					handle_info.process = reinterpret_cast<HANDLE>( system_handle->handle_value );
+					return_handles.push_back( handle_info );
+				}
 			}
+
+			CloseHandle( process_handle );
 		}
 
-		CloseHandle( process_handle );
 		CloseHandle( process_copy );
 	}
 
@@ -284,7 +468,7 @@ HANDLE Process::FetchAccessToken( DWORD desired_access ) const
 {
 	HANDLE token_handle;
 
-	if ( !OpenProcessToken( this->m_handle, desired_access, &token_handle ) ) {
+	if ( !OpenProcessToken( m_handle, desired_access, &token_handle ) ) {
 		return nullptr;
 	}
 
@@ -313,6 +497,8 @@ bool Process::SetPrivilege( LPCTSTR name, BOOL enable_privilege ) const
 		CloseHandle( token );
 		return false;
 	}
+
+	CloseHandle( token );
 
 	return true;
 }
